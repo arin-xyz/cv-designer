@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CV Maker – ATS-friendly PDF from plain text</title>
+<style>
+:root{--bg:#f6f7f4;--ink:#1b2a2f;--muted:#5b6b70;--line:#d3dad8;--accent:#0f6b5c}
+@media (prefers-color-scheme:dark){:root{--bg:#121a1c;--ink:#e8efee;--muted:#9bb0b3;--line:#2a3a3d;--accent:#4fd1b5}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:1.05rem/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:44rem;margin:0 auto;padding:2rem 1.25rem 4rem}
+h1{font:700 2rem/1.15 Georgia,serif;margin:0 0 .5rem}
+p.sub{color:var(--muted);margin:0 0 1.5rem}
+textarea{width:100%;min-height:16rem;padding:1rem;border:1px solid var(--line);border-radius:.5rem;background:transparent;color:inherit;font:inherit;resize:vertical}
+button{margin-top:1rem;padding:.8rem 1.4rem;border:0;border-radius:.4rem;background:var(--accent);color:#fff;font:600 1rem inherit;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#msg{margin-top:1rem;color:var(--muted)}
+#msg.err{color:#c0392b}
+details{margin-top:1.5rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Describe yourself. Get an ATS-friendly CV.</h1>
+  <p class="sub">Write about your experience, education and skills in your own words. You get a clean single-column PDF with real, selectable text.</p>
+  <label for="t" class="sub">Your details</label>
+  <textarea id="t" placeholder="I'm Priya Raman from Pune (priya@email.com, +91 98xxxxxxx). I've worked 3 years as a backend developer at Acme Corp, building payment APIs in Java and cutting latency by 30%. B.E. in Computer Engineering from PICT, 2021. Skills: Java, Spring Boot, SQL, AWS."></textarea>
+  <button id="go" type="button">Create PDF</button>
+  <p id="msg" role="status"></p>
+  <details><summary>Why this passes ATS</summary>
+    <p>One column, standard headings (Summary, Skills, Experience, Projects, Education), a standard font, no tables, icons, images or text boxes, and the text is real text rather than a picture.</p>
+  </details>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+const $=id=>document.getElementById(id), msg=$('msg'), go=$('go');
+go.addEventListener('click', async()=>{
+  msg.className=''; msg.textContent='Writing your CV...'; go.disabled=true;
+  try{
+    const r=await fetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('t').value})});
+    const cv=await r.json();
+    if(!r.ok) throw new Error(cv.error||'Something went wrong.');
+    buildPdf(cv); msg.textContent='Done. Your PDF has been downloaded.';
+  }catch(e){ msg.className='err'; msg.textContent=e.message; }
+  go.disabled=false;
+});
+
+function buildPdf(cv){
+  const {jsPDF}=window.jspdf, doc=new jsPDF({unit:'pt',format:'a4'});
+  const W=doc.internal.pageSize.getWidth(), H=doc.internal.pageSize.getHeight(), M=44, maxW=W-2*M;
+  let y=M;
+  const need=h=>{ if(y+h>H-M){ doc.addPage(); y=M; } };
+  const font=(b,s)=>{ doc.setFont('helvetica',b?'bold':'normal'); doc.setFontSize(s); };
+  const para=(t,{b=false,s=10.5,center=false}={})=>{
+    font(b,s);
+    doc.splitTextToSize(t,maxW).forEach(p=>{ need(14); doc.text(p,center?W/2:M,y,{align:center?'center':'left'}); y+=14; });
+  };
+  const row=(l,r,b)=>{ need(14); font(b,10.5); doc.text(l,M,y); if(r){ font(false,10.5); doc.text(r,W-M,y,{align:'right'}); } y+=14; };
+  const bullet=t=>{
+    font(false,10.5);
+    doc.splitTextToSize(t,maxW-14).forEach((p,i)=>{ need(14); if(!i) doc.text('\u2022',M+2,y); doc.text(p,M+14,y); y+=14; });
+  };
+  const heading=t=>{ y+=8; need(30); font(true,11); doc.text(t.toUpperCase(),M,y); y+=4; doc.setLineWidth(.6); doc.line(M,y,W-M,y); y+=14; };
+  const list=a=>Array.isArray(a)?a.filter(Boolean):[];
+
+  para(cv.name||'Your Name',{b:true,s:20,center:true});
+  para([cv.location,cv.email,cv.phone,...list(cv.links)].filter(Boolean).join(' | '),{center:true});
+
+  if(cv.summary){ heading('Summary'); para(cv.summary); }
+  if(list(cv.skills).length){ heading('Skills'); para(cv.skills.join(', ')); }
+  if(list(cv.experience).length){
+    heading('Experience');
+    cv.experience.forEach(e=>{
+      row(e.company||'',e.dates||'',true);
+      row([e.title,e.location].filter(Boolean).join(', '),'',false);
+      list(e.bullets).forEach(bullet); y+=4;
+    });
+  }
+  if(list(cv.projects).length){
+    heading('Projects');
+    cv.projects.forEach(p=>{ row(p.name||'','',true); list(p.bullets).forEach(bullet); y+=4; });
+  }
+  if(list(cv.education).length){
+    heading('Education');
+    cv.education.forEach(e=>{ row(e.school||'',e.dates||'',true); row(e.degree||'','',false); if(e.details) para(e.details); y+=4; });
+  }
+  if(list(cv.certifications).length){ heading('Certifications'); cv.certifications.forEach(bullet); }
+
+  doc.setProperties({title:(cv.name||'CV')+' - CV'});
+  doc.save((cv.name||'cv').replace(/[^\w]+/g,'-').toLowerCase()+'-cv.pdf');
+}
+</script>
+</body>
+</html>
